@@ -44,6 +44,8 @@
     "conciseDescription": "Wiki đơn giản hóa với ít trang hơn và thông tin thiết yếu",
     "providerGoogle": "Google",
     "providerOpenAI": "OpenAI",
+    "providerMagpie": "Magpie",
+    "lockedProvider": "Nhà cung cấp bị khóa",
     "providerOpenRouter": "OpenRouter",
     "providerOllama": "Ollama (Cục bộ)",
     "localOllama": "Mô hình Ollama cục bộ",

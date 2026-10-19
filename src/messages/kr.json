@@ -44,6 +44,8 @@
       "conciseDescription": "페이지 수가 적고 필수 정보만 포함된 간소화된 위키",
       "providerGoogle": "구글",
       "providerOpenAI": "OpenAI",
+      "providerMagpie": "Magpie",
+      "lockedProvider": "고정된 제공자",
       "providerOpenRouter": "OpenRouter",
       "providerOllama": "Ollama (로컬)",
       "localOllama": "로컬 Ollama 모델",
