@@ -12,6 +12,7 @@ from api.clients import (
     GoogleEmbedderClient,
     GoogleGenAIClient,
     LiteLLMClient,
+    MagpieClient,
     OllamaClient,
     OpenAIClient,
     OpenRouterClient,
@@ -28,6 +29,10 @@ logger = get_logger(__name__)
 # Get API keys from environment variables
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY")
+# Magpie is configured independently of the native OpenAI settings: its own
+# gateway URL, key and Routing Group (model). See api/clients/magpie.py.
+MAGPIE_API_KEY = os.environ.get("MAGPIE_API_KEY")
+MAGPIE_MODEL = os.environ.get("MAGPIE_MODEL")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID")
@@ -73,6 +78,7 @@ CLIENT_CLASSES = {
     GoogleEmbedderClient.__name__: GoogleEmbedderClient,
     OpenAIClient.__name__: OpenAIClient,
     LiteLLMClient.__name__: LiteLLMClient,
+    MagpieClient.__name__: MagpieClient,
     OpenRouterClient.__name__: OpenRouterClient,
     OllamaClient.__name__: OllamaClient,
     BedrockClient.__name__: BedrockClient,
@@ -86,6 +92,7 @@ _DEFAULT_PROVIDER_MAP = {
     "google": GoogleGenAIClient,
     "openai": OpenAIClient,
     "litellm": LiteLLMClient,
+    "magpie": MagpieClient,
     "openrouter": OpenRouterClient,
     "ollama": OllamaClient,
     "bedrock": BedrockClient,
@@ -391,12 +398,15 @@ def get_model_config(provider="google", model=None):
             raise ValueError(f"No default model specified for provider '{provider}'")
 
     # Get model parameters (if present)
-    model_params = {}
-    if model in provider_config.get("models", {}):
-        model_params = provider_config["models"][model]
-    else:
-        default_model = provider_config.get("default_model")
-        model_params = provider_config["models"][default_model]
+    # Fall back to an empty parameter set when neither the requested model nor
+    # the default model is a key of the provider's models map. Magpie's single
+    # Routing Group entry is written literally (env placeholders are substituted
+    # into values, not map keys), so changing MAGPIE_MODEL to an unlisted value
+    # must not raise here.
+    models_config = provider_config.get("models", {})
+    model_params = models_config.get(model)
+    if model_params is None:
+        model_params = models_config.get(provider_config.get("default_model")) or {}
 
     # Prepare base configuration
     result = {

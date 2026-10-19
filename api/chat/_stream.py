@@ -9,6 +9,8 @@ from api.config import (
     AWS_SECRET_ACCESS_KEY,
     GOOGLE_API_KEY,
     LITELLM_API_KEY,
+    MAGPIE_API_KEY,
+    MAGPIE_MODEL,
     OPENAI_API_KEY,
     OPENROUTER_API_KEY,
 )
@@ -226,6 +228,37 @@ class LiteLLMChatStreamer(_OpenAICompatStreamer):
         from api.clients import LiteLLMClient
 
         return LiteLLMClient()
+
+
+class MagpieChatStreamer(_OpenAICompatStreamer):
+    provider = "magpie"
+    error_hint = (
+        "Please check that you have set the MAGPIE_BASE_URL and MAGPIE_API_KEY "
+        "environment variables with valid values."
+    )
+
+    def __init__(self, *, model: str, model_config: MODEL_CFG):
+        if not MAGPIE_API_KEY:
+            logger.warning("MAGPIE_API_KEY not configured, but continuing with request")
+
+        self.client = self._build_client()
+        # The configured Routing Group (MAGPIE_MODEL) is authoritative: Magpie
+        # owns the model routing, so whatever model a request carried is ignored
+        # when MAGPIE_MODEL is set.
+        self.model_kwargs = {"model": MAGPIE_MODEL or model, "stream": True}
+        # Model parameters are optional: a Routing Group not listed in
+        # generator.json yields an empty parameter set, in which case we let
+        # Magpie apply its own defaults.
+        for key in ("temperature", "top_p"):
+            if key in model_config:
+                self.model_kwargs[key] = model_config[key]
+
+        logger.debug("Prompting Magpie with kwargs: %s", self.model_kwargs)
+
+    def _build_client(self):
+        from api.clients import MagpieClient
+
+        return MagpieClient()
 
 
 class BedrockChatStreamer(ChatStreamer):
