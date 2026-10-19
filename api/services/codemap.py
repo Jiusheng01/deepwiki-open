@@ -17,7 +17,7 @@ import re
 from collections.abc import AsyncIterator, Callable
 
 from api.chat import ChatStreamer, prompt_builder
-from api.config import get_model_config
+from api.config import get_model_config, resolve_provider
 from api.logger import get_logger
 from api.prompts import CODEMAP_ENRICH_PROMPT, CODEMAP_SKELETON_PROMPT
 from api.rag import RAG
@@ -239,11 +239,14 @@ async def generate_codemap(request: CodeMapRequest) -> AsyncIterator[str]:
     context_text = _format_context(documents) if documents else ""
     yield _phase("analyzing", "done", chunk_count=len(documents))
 
-    model_config = get_model_config(request.provider, request.model)["model_kwargs"]
+    # Locked Provider: the request's Provider is coerced to the locked one (see
+    # the ADR) so CodeMap cannot generate against anything but the lock.
+    provider = resolve_provider(request.provider)
+    model_config = get_model_config(provider, request.model)["model_kwargs"]
 
     def _new_streamer() -> ChatStreamer:
         return ChatStreamer.create(
-            provider=request.provider,
+            provider=provider,
             model=request.model,
             model_config=model_config,
         )

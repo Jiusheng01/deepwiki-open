@@ -368,6 +368,37 @@ if lang_config:
     configs["lang_config"] = lang_config
 
 
+# --------------------------------------------------------------------------- #
+# Locked Provider (single-provider deployment mode)
+# --------------------------------------------------------------------------- #
+# When DEEPWIKI_LOCK_PROVIDER names a provider, the whole deployment is pinned
+# to it: every generation request is served by that provider regardless of the
+# Provider it carries (including an omitted one, which the request schema
+# would otherwise default to "google"). See docs/adr/0001 for why the request's
+# Provider is coerced rather than rejected.
+LOCK_PROVIDER_ENV = "DEEPWIKI_LOCK_PROVIDER"
+
+
+def get_locked_provider() -> str | None:
+    """Return the deployment's Locked Provider id, or None when unlocked.
+
+    Read from the environment each call; a blank/whitespace value counts as
+    unset so an empty variable restores the multi-provider behaviour.
+    """
+    return (os.environ.get(LOCK_PROVIDER_ENV) or "").strip() or None
+
+
+def resolve_provider(provider: str | None) -> str | None:
+    """Resolve the Provider a generation request is actually served by.
+
+    While the lock is set this is the one place the coercion happens: the
+    request's Provider value is deliberately ignored and the locked Provider is
+    returned for *any* input -- an omitted/empty value as much as an explicitly
+    different one. With no lock the request value is returned unchanged.
+    """
+    return get_locked_provider() or provider
+
+
 def get_model_config(provider="google", model=None):
     """
     Get configuration for the specified provider and model

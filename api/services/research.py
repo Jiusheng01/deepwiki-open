@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator, Callable
 from functools import partial
 
 from api.chat import ChatStreamer, is_token_limit_error, prompt_builder
-from api.config import configs, get_model_config
+from api.config import configs, get_model_config, resolve_provider
 from api.logger import get_logger
 from api.prompts import (
     DEEP_RESEARCH_FINAL_ITERATION_PROMPT,
@@ -287,9 +287,13 @@ async def research_chat(
                     error_str += f"\n\n{streamer.error_hint}"
                 yield "\n" + error_str
 
-    model_config = get_model_config(request.provider, request.model)["model_kwargs"]
+    # Locked Provider: when the deployment is locked the request's Provider is
+    # deliberately ignored here (coerced, never rejected) so an omitted or
+    # foreign Provider cannot route generation away from the lock.
+    provider = resolve_provider(request.provider)
+    model_config = get_model_config(provider, request.model)["model_kwargs"]
     chat_streamer = ChatStreamer.create(
-        provider=request.provider,
+        provider=provider,
         model=request.model,
         model_config=model_config,
     )
