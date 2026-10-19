@@ -2,28 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useLanguage } from '@/contexts/LanguageContext';
-
-// Define the interfaces for our model configuration
-interface Model {
-  id: string;
-  name: string;
-}
-
-interface Provider {
-  id: string;
-  name: string;
-  models: Model[];
-  supportsCustomModel?: boolean;
-}
-
-interface ModelConfig {
-  providers: Provider[];
-  defaultProvider: string;
-  // Present only when the deployment is locked to a single provider.
-  // Both fields are absent (not null) when the lock is off.
-  lockedProvider?: string;
-  lockedModel?: string;
-}
+import { useModelConfig, type Provider } from '@/hooks/useModelConfig';
 
 interface ModelSelectorProps {
   provider: string;
@@ -74,59 +53,36 @@ export default function UserSelector({
   const [filterMode, setFilterMode] = useState<'exclude' | 'include'>('exclude');
   const { messages: t } = useLanguage();
 
-  // State for model configurations from backend
-  const [modelConfig, setModelConfig] = useState<ModelConfig | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Model configurations, and the deployment lock, from the backend.
+  const { modelConfig, isLoading, error, lockedProvider, lockedModel } = useModelConfig();
 
   // State for viewing default values
   const [showDefaultDirs, setShowDefaultDirs] = useState(false);
   const [showDefaultFiles, setShowDefaultFiles] = useState(false);
 
-  // Fetch model configurations from the backend
+  // When the deployment is locked, the locked provider/model are
+  // authoritative: force them into the shared state so the rest of the
+  // dialog and the navigation query string use concrete values. Otherwise
+  // initialize provider and model with defaults from the API if not already
+  // set.
   useEffect(() => {
-    const fetchModelConfig = async () => {
-      try {
-        setIsLoading(true);
-        setError(null);
+    if (!modelConfig) return;
 
-        const response = await fetch('/api/models/config');
-
-        if (!response.ok) {
-          throw new Error(`Error fetching model configurations: ${response.status}`);
-        }
-
-        const data = await response.json();
-        setModelConfig(data);
-
-        // When the deployment is locked, the locked provider/model are
-        // authoritative: force them into the shared state so the rest of the
-        // dialog and the navigation query string use concrete values.
-        if (data.lockedProvider) {
-          setProvider(data.lockedProvider);
-          if (data.lockedModel) {
-            setModel(data.lockedModel);
-          }
-        } else if (!provider && data.defaultProvider) {
-          // Initialize provider and model with defaults from API if not already set
-          setProvider(data.defaultProvider);
-
-          // Find the default provider and set its default model
-          const selectedProvider = data.providers.find((p: Provider) => p.id === data.defaultProvider);
-          if (selectedProvider && selectedProvider.models.length > 0) {
-            setModel(selectedProvider.models[0].id);
-          }
-        }
-      } catch (err) {
-        console.error('Failed to fetch model configurations:', err);
-        setError('Failed to load model configurations. Using default options.');
-      } finally {
-        setIsLoading(false);
+    if (lockedProvider) {
+      setProvider(lockedProvider);
+      if (lockedModel) {
+        setModel(lockedModel);
       }
-    };
+    } else if (!provider && modelConfig.defaultProvider) {
+      setProvider(modelConfig.defaultProvider);
 
-    fetchModelConfig();
-  }, [provider, setModel, setProvider]);
+      // Find the default provider and set its default model
+      const selectedProvider = modelConfig.providers.find((p: Provider) => p.id === modelConfig.defaultProvider);
+      if (selectedProvider && selectedProvider.models.length > 0) {
+        setModel(selectedProvider.models[0].id);
+      }
+    }
+  }, [modelConfig, lockedProvider, lockedModel, provider, setModel, setProvider]);
 
   // Handler for changing provider
   const handleProviderChange = (newProvider: string) => {
@@ -280,7 +236,6 @@ next.config.js
     return t.form?.[key] || displayName;
   };
 
-  const lockedProvider = modelConfig?.lockedProvider;
   const isLocked = !!lockedProvider;
 
   // Display loading state
@@ -306,11 +261,11 @@ next.config.js
             <span className="text-xs font-medium text-[var(--muted)] mr-1.5">
               {t.form?.lockedProvider || 'Locked Provider'}:
             </span>
-            <span className="font-medium">{getProviderLabel(lockedProvider!)}</span>
-            {modelConfig?.lockedModel && (
+            <span className="font-medium">{getProviderLabel(lockedProvider)}</span>
+            {lockedModel && (
               <>
                 <span className="mx-1.5 text-[var(--muted)]">·</span>
-                <span className="font-medium">{modelConfig.lockedModel}</span>
+                <span className="font-medium">{lockedModel}</span>
               </>
             )}
           </div>

@@ -7,6 +7,7 @@ import Markdown from '@/components/Markdown';
 import ModelSelectionModal from '@/components/ModelSelectionModal';
 import ThemeToggle from '@/components/theme-toggle';
 import WikiTreeView from '@/components/WikiTreeView';
+import { useModelConfig } from '@/hooks/useModelConfig';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { RepoInfo } from '@/types/repoinfo';
 import getRepoUrl from '@/utils/getRepoUrl';
@@ -186,40 +187,21 @@ export default function RepoWikiPage() {
 
   // Locked-deployment state, read from /api/models/config. Both fields are
   // absent (not null) when the lock is off, so guard on truthiness.
-  const [lockedProvider, setLockedProvider] = useState('');
-  const [lockedModel, setLockedModel] = useState('');
+  const { lockedProvider, lockedModel } = useModelConfig();
 
   // Under a locked deployment the provider/model are fixed for the whole
   // deployment: pin the local selection to the locked values so the refresh
   // flow reuses them automatically instead of prompting.
   useEffect(() => {
-    let cancelled = false;
-    const fetchModelConfig = async () => {
-      try {
-        const response = await fetch('/api/models/config');
-        if (!response.ok) {
-          throw new Error(`Error fetching model configurations: ${response.status}`);
-        }
-        const data = await response.json();
-        if (cancelled || !data.lockedProvider) return;
+    if (!lockedProvider) return;
 
-        setLockedProvider(data.lockedProvider);
-        setLockedModel(data.lockedModel || '');
-        setSelectedProviderState(data.lockedProvider);
-        if (data.lockedModel) {
-          setSelectedModelState(data.lockedModel);
-        }
-        setIsCustomSelectedModelState(false);
-        setCustomSelectedModelState('');
-      } catch (err) {
-        console.error('Failed to fetch model configurations:', err);
-      }
-    };
-    fetchModelConfig();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    setSelectedProviderState(lockedProvider);
+    if (lockedModel) {
+      setSelectedModelState(lockedModel);
+    }
+    setIsCustomSelectedModelState(false);
+    setCustomSelectedModelState('');
+  }, [lockedProvider, lockedModel]);
 
 
   // Wiki type state - default to comprehensive view

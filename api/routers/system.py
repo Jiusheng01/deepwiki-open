@@ -2,7 +2,12 @@ from datetime import datetime
 
 from fastapi import APIRouter
 
-from api.config import configs, get_locked_provider
+from api.config import (
+    LockedProviderMisconfiguredError,
+    configs,
+    get_locked_model,
+    get_locked_provider,
+)
 from api.logger import get_logger
 from api.schemas import Model, ModelConfig, Provider
 
@@ -39,6 +44,9 @@ async def get_model_config():
     While the deployment is locked (DEEPWIKI_LOCK_PROVIDER set) the response
     additionally reports the locked provider and its Routing Group; the lock
     fields are omitted entirely when unlocked so the response is unchanged.
+    A locked deployment whose Routing Group environment variable is unset fails
+    loudly (LockedProviderMisconfiguredError) instead of reporting the raw
+    placeholder.
 
     Returns:
         ModelConfig: A configuration object containing providers and their models
@@ -78,6 +86,10 @@ async def get_model_config():
         )
         return config
 
+    except LockedProviderMisconfiguredError:
+        # A misconfigured lock is fatal, not something to paper over with the
+        # fallback configuration: surface it (and its logged message).
+        raise
     except Exception as e:
         logger.error(f"Error creating model configuration: {str(e)}")
         # Return some default configuration in case of error
@@ -104,8 +116,7 @@ def locked_provider_fields() -> dict:
     locked_provider = get_locked_provider()
     if not locked_provider:
         return {}
-    provider_config = configs.get("providers", {}).get(locked_provider, {})
     return {
         "lockedProvider": locked_provider,
-        "lockedModel": provider_config.get("default_model"),
+        "lockedModel": get_locked_model(),
     }

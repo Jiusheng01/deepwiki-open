@@ -9,6 +9,7 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import RepoInfo from '@/types/repoinfo';
 import getRepoUrl from '@/utils/getRepoUrl';
 import ModelSelectionModal from './ModelSelectionModal';
+import { useModelConfig } from '@/hooks/useModelConfig';
 import {
   createChatWebSocket,
   closeWebSocket,
@@ -39,18 +40,6 @@ const MODES: { id: ChatMode; label: string; description: string; icon: React.Rea
   { id: 'deep_research', label: 'Deep Research', description: 'More thorough investigation', icon: <FaMicroscope size={14} /> },
   { id: 'codemap', label: 'Codemap', description: 'Structured explanation grounded in code', icon: <FaBook size={14} /> },
 ];
-
-interface Model {
-  id: string;
-  name: string;
-}
-
-interface Provider {
-  id: string;
-  name: string;
-  models: Model[];
-  supportsCustomModel?: boolean;
-}
 
 interface Message {
   role: 'user' | 'assistant' | 'system';
@@ -140,10 +129,14 @@ const Ask: React.FC<AskProps> = ({
   const [customSelectedModel, setCustomSelectedModel] = useState(customModel);
   const [isModelSelectionModalOpen, setIsModelSelectionModalOpen] = useState(false);
   const [isComprehensiveView, setIsComprehensiveView] = useState(true);
-  // Locked-deployment state, read from /api/models/config. Both fields are
-  // absent (not null) when the lock is off, so guard on truthiness.
-  const [lockedProvider, setLockedProvider] = useState('');
-  const [lockedModel, setLockedModel] = useState('');
+
+  // Model configuration, including the deployment lock (empty when unlocked).
+  const {
+    modelConfig,
+    isLoading: isModelConfigLoading,
+    lockedProvider,
+    lockedModel,
+  } = useModelConfig();
 
   // Get language context for translations
   const { messages } = useLanguage();
@@ -200,53 +193,40 @@ const Ask: React.FC<AskProps> = ({
     modelRef.current = model;
   }, [provider, model]);
 
+  // The loading state is only shown for the "no provider/model supplied"
+  // case, preserving the pre-existing behaviour for the query-string flow
+  // (which already carries concrete values and must not flash a spinner).
+  const needsModelDefaults = providerRef.current === '' || modelRef.current === '';
   useEffect(() => {
-    const fetchModel = async () => {
-      // The loading state is only shown for the "no provider/model supplied"
-      // case, preserving the pre-existing behaviour for the query-string flow.
-      const needsDefaults = providerRef.current === '' || modelRef.current === '';
-      try {
-        if (needsDefaults) setIsLoading(true);
+    if (needsModelDefaults) setIsLoading(isModelConfigLoading);
+  }, [needsModelDefaults, isModelConfigLoading]);
 
-        const response = await fetch('/api/models/config');
-        if (!response.ok) {
-          throw new Error(`Error fetching model configurations: ${response.status}`);
-        }
+  // Apply the fetched configuration to the local selection: a locked
+  // deployment's provider/model are authoritative; otherwise fall back to the
+  // configured default provider only when none was supplied. Runs whenever the
+  // configuration arrives — the config is fetched once (on mount), so this
+  // never re-fetches on provider/model changes.
+  useEffect(() => {
+    if (!modelConfig) return;
 
-        const data = await response.json();
-
-        // Locked deployment: the locked provider/model are authoritative.
-        if (data.lockedProvider) {
-          setLockedProvider(data.lockedProvider);
-          setLockedModel(data.lockedModel || '');
-          setSelectedProvider(data.lockedProvider);
-          if (data.lockedModel) {
-            setSelectedModel(data.lockedModel);
-          }
-          return;
-        }
-
-        // use latest provider/model ref to check
-        if(providerRef.current == '' || modelRef.current== '') {
-          setSelectedProvider(data.defaultProvider);
-
-          // Find the default provider and set its default model
-          const selectedProvider = data.providers.find((p:Provider) => p.id === data.defaultProvider);
-          if (selectedProvider && selectedProvider.models.length > 0) {
-            setSelectedModel(selectedProvider.models[0].id);
-          }
-        } else {
-          setSelectedProvider(providerRef.current);
-          setSelectedModel(modelRef.current);
-        }
-      } catch (err) {
-        console.error('Failed to fetch model configurations:', err);
-      } finally {
-        if (needsDefaults) setIsLoading(false);
+    if (lockedProvider) {
+      setSelectedProvider(lockedProvider);
+      if (lockedModel) {
+        setSelectedModel(lockedModel);
       }
-    };
-    fetchModel();
-  }, [provider, model]);
+      return;
+    }
+
+    if (providerRef.current === '' || modelRef.current === '') {
+      setSelectedProvider(modelConfig.defaultProvider);
+
+      // Find the default provider and set its default model
+      const selectedProvider = modelConfig.providers.find(p => p.id === modelConfig.defaultProvider);
+      if (selectedProvider && selectedProvider.models.length > 0) {
+        setSelectedModel(selectedProvider.models[0].id);
+      }
+    }
+  }, [modelConfig, lockedProvider, lockedModel]);
 
   const clearConversation = () => {
     setQuestion('');

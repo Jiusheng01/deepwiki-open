@@ -46,6 +46,8 @@ if OPENAI_API_KEY:
     os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 if LITELLM_API_KEY:
     os.environ["LITELLM_API_KEY"] = LITELLM_API_KEY
+if MAGPIE_API_KEY:
+    os.environ["MAGPIE_API_KEY"] = MAGPIE_API_KEY
 if GOOGLE_API_KEY:
     os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
 if OPENROUTER_API_KEY:
@@ -397,6 +399,53 @@ def resolve_provider(provider: str | None) -> str | None:
     different one. With no lock the request value is returned unchanged.
     """
     return get_locked_provider() or provider
+
+
+# A configuration string that is still an unsubstituted environment placeholder
+# (replace_env_placeholders substitutes values, so this survives only when the
+# referenced environment variable was not set when the config was loaded).
+_UNRESOLVED_PLACEHOLDER = re.compile(r"\$\{([A-Z0-9_]+)\}")
+
+
+class LockedProviderMisconfiguredError(RuntimeError):
+    """The Locked Provider is set but its Routing Group is unresolved."""
+
+
+def get_locked_model() -> str | None:
+    """Return the Locked Provider's Routing Group (model), or None when unlocked.
+
+    The Routing Group is the Locked Provider's configured default model, written
+    as an environment placeholder (Magpie's is ``${MAGPIE_MODEL}``). If that
+    variable was not set when the configuration was loaded, the placeholder is
+    left in the config verbatim; used as-is it would silently leak into the
+    /models/config response, the UI, the navigation URL and the outgoing request.
+    Refuse to pass it through instead -- fail loudly and name the missing
+    variable.
+    """
+    locked_provider = get_locked_provider()
+    if not locked_provider:
+        return None
+
+    default_model = configs.get("providers", {}).get(locked_provider, {}).get(
+        "default_model"
+    )
+    match = (
+        _UNRESOLVED_PLACEHOLDER.fullmatch(default_model)
+        if isinstance(default_model, str)
+        else None
+    )
+    if match:
+        env_var_name = match.group(1)
+        message = (
+            f"DEEPWIKI_LOCK_PROVIDER is set to '{locked_provider}' but its Routing "
+            f"Group model is the unresolved placeholder '{default_model}': the "
+            f"{env_var_name} environment variable is not set. Set {env_var_name} to the "
+            f"Routing Group, or unset DEEPWIKI_LOCK_PROVIDER, and restart."
+        )
+        logger.error(message)
+        raise LockedProviderMisconfiguredError(message)
+
+    return default_model
 
 
 def get_model_config(provider="google", model=None):

@@ -10,6 +10,7 @@ import ConfigurationModal from '@/components/ConfigurationModal';
 import ProcessedProjects from '@/components/ProcessedProjects';
 import { extractUrlPath, extractUrlDomain } from '@/utils/urlDecoder';
 import { useProcessedProjects } from '@/hooks/useProcessedProjects';
+import { useModelConfig } from '@/hooks/useModelConfig';
 
 import { useLanguage } from '@/contexts/LanguageContext';
 
@@ -130,8 +131,7 @@ export default function Home() {
   // Deployment-level lock. When the backend reports a locked provider, the
   // generation URL is always built with these values so downstream pages
   // receive concrete provider/model regardless of cached or default state.
-  const [lockedProvider, setLockedProvider] = useState<string>('');
-  const [lockedModel, setLockedModel] = useState<string>('');
+  const { lockedProvider, lockedModel } = useModelConfig();
 
   // Wiki type state - default to comprehensive view
   const [isComprehensiveView, setIsComprehensiveView] = useState<boolean>(true);
@@ -177,28 +177,6 @@ export default function Home() {
     };
 
     fetchAuthStatus();
-  }, []);
-
-  // Fetch the model configuration to learn whether the deployment is locked to
-  // a single provider. Absent fields (lock off) leave both states empty.
-  useEffect(() => {
-    const fetchLockedProvider = async () => {
-      try {
-        const response = await fetch('/api/models/config');
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        const data = await response.json();
-        if (data.lockedProvider) {
-          setLockedProvider(data.lockedProvider);
-          setLockedModel(data.lockedModel || '');
-        }
-      } catch (err) {
-        console.error('Failed to fetch locked provider configuration:', err);
-      }
-    };
-
-    fetchLockedProvider();
   }, []);
 
   // Parse repository URL/input and extract owner and repo
