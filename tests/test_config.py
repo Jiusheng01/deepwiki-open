@@ -1,7 +1,7 @@
 import pytest
 
 from api.clients import MagpieClient
-from api.config import configs, get_model_config, iterate_files, resolve_provider
+from api.config import get_model_config, iterate_files, resolve_provider
 
 
 def make_repo(root):
@@ -93,18 +93,30 @@ def test_get_model_config_magpie_unknown_routing_group_does_not_raise():
 
 
 def test_get_model_config_magpie_uses_configured_default_model():
-    default_model = configs["providers"]["magpie"]["default_model"]
+    import api.config as api_config
 
-    result = get_model_config("magpie", None)
+    # Read the configured default through the live module: other test modules
+    # importlib.reload(api.config), which rebinds its module-level ``configs``.
+    # An import-time binding could be a stale object, so the oracle and the
+    # code under test would then resolve against two different configs.
+    default_model = api_config.configs["providers"]["magpie"]["default_model"]
+
+    result = api_config.get_model_config("magpie", None)
 
     assert result["model_client"] is MagpieClient
     assert result["model_kwargs"]["model"] == default_model
 
 
-def test_models_config_endpoint_exposes_magpie_as_single_group_provider():
+def test_models_config_endpoint_exposes_magpie_as_single_group_provider(monkeypatch):
     from fastapi.testclient import TestClient
 
+    # Import api.main first: importing it runs its one-time load_dotenv(), which
+    # a locked checkout's .env drives. Doing that *before* forcing the lock off
+    # keeps .env from putting DEEPWIKI_LOCK_PROVIDER back once we remove it. The
+    # assertions below are the unlocked, multi-provider shape.
     from api.main import app
+
+    monkeypatch.delenv("DEEPWIKI_LOCK_PROVIDER", raising=False)
 
     with TestClient(app) as client:
         response = client.get("/models/config")
@@ -193,6 +205,10 @@ def test_models_config_reports_locked_provider_and_its_routing_group(monkeypatch
 
 
 def test_models_config_is_unchanged_when_lock_unset(monkeypatch):
+    # Import api.main (and thus run its one-time load_dotenv()) before removing
+    # the lock, so .env cannot re-set DEEPWIKI_LOCK_PROVIDER behind us.
+    import api.main  # noqa: F401
+
     monkeypatch.delenv("DEEPWIKI_LOCK_PROVIDER", raising=False)
 
     body = _models_config()
