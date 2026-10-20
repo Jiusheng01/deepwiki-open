@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import pytest
 
 from api.chat import ChatStreamer
@@ -105,3 +107,83 @@ def test_magpie_streamer_falls_back_to_request_model_without_env(monkeypatch):
     streamer = MagpieChatStreamer(model="group/fallback", model_config={"temperature": 0.7})
 
     assert streamer.model_kwargs["model"] == "group/fallback"
+
+
+# --------------------------------------------------------------------------- #
+# Magpie streaming: the request goes straight to the gateway's chat completions
+# endpoint. adalflow 1.1.3 routes OpenAI-compatible calls through the Responses
+# API, whose events carry no `.choices`, so the shared base streamer cannot be
+# used for Magpie.
+# --------------------------------------------------------------------------- #
+class _FakeAsyncStream:
+    """Stands in for the OpenAI SDK's async chat-completions stream."""
+
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    def __aiter__(self):
+        return self._iterate()
+
+    async def _iterate(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
+class _FakeAsyncClient:
+    """Stands in for ``AsyncOpenAI`` at the SDK / network boundary."""
+
+    def __init__(self, chunks):
+        self.requests: list[dict] = []
+        stream = _FakeAsyncStream(chunks)
+
+        async def create(**kwargs):
+            self.requests.append(kwargs)
+            return stream
+
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=create))
+
+
+def _chunk(content):
+    return SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=content))])
+
+
+_EMPTY_CHUNK = SimpleNamespace(choices=[])
+
+
+def _magpie_streamer(monkeypatch, async_client):
+    # The async client is the external system boundary (the network), so it is
+    # the one thing worth stubbing; everything else is real.
+    monkeypatch.setattr(MagpieChatStreamer, "_build_client", lambda self: SimpleNamespace())
+    monkeypatch.setattr(
+        MagpieChatStreamer, "_build_async_client", lambda self: async_client
+    )
+    return MagpieChatStreamer(model="request-model", model_config={"temperature": 0.3})
+
+
+async def _collect(streamer, prompt):
+    return [text async for text in streamer.respond_stream(prompt)]
+
+
+@pytest.mark.asyncio
+async def test_magpie_respond_stream_yields_only_text_deltas(monkeypatch):
+    client = _FakeAsyncClient([_chunk("PONG"), _EMPTY_CHUNK, _chunk(""), _chunk("!")])
+
+    streamer = _magpie_streamer(monkeypatch, client)
+
+    assert await _collect(streamer, "say PONG") == ["PONG", "!"]
+
+
+@pytest.mark.asyncio
+async def test_magpie_respond_stream_calls_chat_completions(monkeypatch):
+    import api.chat._stream as stream_mod
+
+    monkeypatch.setattr(stream_mod, "MAGPIE_MODEL", "group/ds")
+    client = _FakeAsyncClient([_chunk("hi")])
+
+    streamer = _magpie_streamer(monkeypatch, client)
+    await _collect(streamer, "hello")
+
+    (request,) = client.requests
+    assert request["model"] == "group/ds"
+    assert request["stream"] is True
+    assert request["messages"] == [{"role": "user", "content": "hello"}]
