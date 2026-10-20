@@ -93,12 +93,9 @@ def test_chat_request_naming_another_provider_is_coerced_to_lock(monkeypatch):
 
 
 def test_chat_routing_unchanged_when_lock_unset(monkeypatch):
-    # Import api.main first: importing it runs its one-time load_dotenv(), which
-    # a locked checkout's .env drives. Doing that *before* removing the lock
-    # keeps .env from re-setting DEEPWIKI_LOCK_PROVIDER once we unset it.
-    import api.main  # noqa: F401
-
-    monkeypatch.delenv("DEEPWIKI_LOCK_PROVIDER", raising=False)
+    # A blank value means unset (see get_locked_provider), so this is order-free
+    # with respect to api.main's one-time load_dotenv().
+    monkeypatch.setenv("DEEPWIKI_LOCK_PROVIDER", "")
     # The OpenAI client refuses to be constructed without this variable, and the
     # network is stubbed below, so pin a throwaway key instead of depending on
     # the ambient environment holding a real one.

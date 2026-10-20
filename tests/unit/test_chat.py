@@ -166,11 +166,34 @@ async def _collect(streamer, prompt):
 
 @pytest.mark.asyncio
 async def test_magpie_respond_stream_yields_only_text_deltas(monkeypatch):
+    # A chunk carrying an empty-string delta is still a text delta (its content
+    # is present, merely empty), matching the shared OpenAI-compatible streamer;
+    # only the choice-less chunk is dropped.
     client = _FakeAsyncClient([_chunk("PONG"), _EMPTY_CHUNK, _chunk(""), _chunk("!")])
 
     streamer = _magpie_streamer(monkeypatch, client)
 
-    assert await _collect(streamer, "say PONG") == ["PONG", "!"]
+    assert await _collect(streamer, "say PONG") == ["PONG", "", "!"]
+
+
+@pytest.mark.asyncio
+async def test_magpie_respond_stream_skips_chunk_with_none_delta(monkeypatch):
+    delta_less = SimpleNamespace(choices=[SimpleNamespace(delta=None)])
+    client = _FakeAsyncClient([delta_less, _chunk("PONG")])
+
+    streamer = _magpie_streamer(monkeypatch, client)
+
+    assert await _collect(streamer, "say PONG") == ["PONG"]
+
+
+@pytest.mark.asyncio
+async def test_magpie_respond_stream_skips_chunk_with_none_choices(monkeypatch):
+    choice_less = SimpleNamespace(choices=None)
+    client = _FakeAsyncClient([choice_less, _chunk("PONG")])
+
+    streamer = _magpie_streamer(monkeypatch, client)
+
+    assert await _collect(streamer, "say PONG") == ["PONG"]
 
 
 @pytest.mark.asyncio

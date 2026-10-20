@@ -247,6 +247,11 @@ class MagpieChatStreamer(ChatStreamer):
         # OpenAI-compatible streamer cannot be used here. MagpieClient is still
         # reused — but only to resolve MAGPIE_BASE_URL / MAGPIE_API_KEY.
         self.client = self._build_client()
+        # ``respond_stream`` may run more than once per streamer (the chat
+        # pipeline retries without context on a token-limit error); build the
+        # async client once, lazily, and reuse it rather than opening a fresh
+        # httpx connection pool per call.
+        self._async_client: "AsyncOpenAI" | None = None
         # The configured Routing Group (MAGPIE_MODEL) is authoritative: Magpie
         # owns model routing, so whatever model a request carried is ignored
         # when MAGPIE_MODEL is set.
@@ -272,9 +277,10 @@ class MagpieChatStreamer(ChatStreamer):
         return self.client.init_async_client()
 
     async def respond_stream(self, prompt: str) -> AsyncIterator[str]:
-        client = self._build_async_client()
+        if self._async_client is None:
+            self._async_client = self._build_async_client()
         response: "AsyncStream[ChatCompletionChunk]" = (
-            await client.chat.completions.create(
+            await self._async_client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 **self.model_kwargs,
             )
@@ -284,7 +290,7 @@ class MagpieChatStreamer(ChatStreamer):
             if (
                 chunk.choices
                 and chunk.choices[0].delta is not None
-                and chunk.choices[0].delta.content
+                and chunk.choices[0].delta.content is not None
             ):
                 yield chunk.choices[0].delta.content
 
