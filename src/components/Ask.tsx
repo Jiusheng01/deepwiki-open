@@ -9,6 +9,7 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import RepoInfo from '@/types/repoinfo';
 import getRepoUrl from '@/utils/getRepoUrl';
 import ModelSelectionModal from './ModelSelectionModal';
+import { useModelConfig } from '@/hooks/useModelConfig';
 import {
   createChatWebSocket,
   closeWebSocket,
@@ -39,18 +40,6 @@ const MODES: { id: ChatMode; label: string; description: string; icon: React.Rea
   { id: 'deep_research', label: 'Deep Research', description: 'More thorough investigation', icon: <FaMicroscope size={14} /> },
   { id: 'codemap', label: 'Codemap', description: 'Structured explanation grounded in code', icon: <FaBook size={14} /> },
 ];
-
-interface Model {
-  id: string;
-  name: string;
-}
-
-interface Provider {
-  id: string;
-  name: string;
-  models: Model[];
-  supportsCustomModel?: boolean;
-}
 
 interface Message {
   role: 'user' | 'assistant' | 'system';
@@ -141,6 +130,14 @@ const Ask: React.FC<AskProps> = ({
   const [isModelSelectionModalOpen, setIsModelSelectionModalOpen] = useState(false);
   const [isComprehensiveView, setIsComprehensiveView] = useState(true);
 
+  // Model configuration, including the deployment lock (empty when unlocked).
+  const {
+    modelConfig,
+    isLoading: isModelConfigLoading,
+    lockedProvider,
+    lockedModel,
+  } = useModelConfig();
+
   // Get language context for translations
   const { messages } = useLanguage();
 
@@ -196,41 +193,40 @@ const Ask: React.FC<AskProps> = ({
     modelRef.current = model;
   }, [provider, model]);
 
+  // The loading state is only shown for the "no provider/model supplied"
+  // case, preserving the pre-existing behaviour for the query-string flow
+  // (which already carries concrete values and must not flash a spinner).
+  const needsModelDefaults = providerRef.current === '' || modelRef.current === '';
   useEffect(() => {
-    const fetchModel = async () => {
-      try {
-        setIsLoading(true);
+    if (needsModelDefaults) setIsLoading(isModelConfigLoading);
+  }, [needsModelDefaults, isModelConfigLoading]);
 
-        const response = await fetch('/api/models/config');
-        if (!response.ok) {
-          throw new Error(`Error fetching model configurations: ${response.status}`);
-        }
+  // Apply the fetched configuration to the local selection: a locked
+  // deployment's provider/model are authoritative; otherwise fall back to the
+  // configured default provider only when none was supplied. Runs whenever the
+  // configuration arrives — the config is fetched once (on mount), so this
+  // never re-fetches on provider/model changes.
+  useEffect(() => {
+    if (!modelConfig) return;
 
-        const data = await response.json();
-
-        // use latest provider/model ref to check
-        if(providerRef.current == '' || modelRef.current== '') {
-          setSelectedProvider(data.defaultProvider);
-
-          // Find the default provider and set its default model
-          const selectedProvider = data.providers.find((p:Provider) => p.id === data.defaultProvider);
-          if (selectedProvider && selectedProvider.models.length > 0) {
-            setSelectedModel(selectedProvider.models[0].id);
-          }
-        } else {
-          setSelectedProvider(providerRef.current);
-          setSelectedModel(modelRef.current);
-        }
-      } catch (err) {
-        console.error('Failed to fetch model configurations:', err);
-      } finally {
-        setIsLoading(false);
+    if (lockedProvider) {
+      setSelectedProvider(lockedProvider);
+      if (lockedModel) {
+        setSelectedModel(lockedModel);
       }
-    };
-    if(provider == '' || model == '') {
-      fetchModel()
+      return;
     }
-  }, [provider, model]);
+
+    if (providerRef.current === '' || modelRef.current === '') {
+      setSelectedProvider(modelConfig.defaultProvider);
+
+      // Find the default provider and set its default model
+      const selectedProvider = modelConfig.providers.find(p => p.id === modelConfig.defaultProvider);
+      if (selectedProvider && selectedProvider.models.length > 0) {
+        setSelectedModel(selectedProvider.models[0].id);
+      }
+    }
+  }, [modelConfig, lockedProvider, lockedModel]);
 
   const clearConversation = () => {
     setQuestion('');
@@ -1268,17 +1264,24 @@ const Ask: React.FC<AskProps> = ({
       {/* Input area — pinned to the bottom of the conversation for easy typing */}
       <div className="sticky bottom-0 bg-[var(--card-bg)] border-t border-[var(--border-color)]/40 px-4 py-3 mt-4">
         <div className="flex items-center justify-between mb-2">
-          {/* Model selection button */}
-          <button
-            type="button"
-            onClick={() => setIsModelSelectionModalOpen(true)}
-            className="text-xs px-2.5 py-1 rounded border border-[var(--border-color)]/40 bg-[var(--background)]/10 text-[var(--foreground)]/80 hover:bg-[var(--background)]/30 hover:text-[var(--foreground)] transition-colors flex items-center gap-1.5"
-          >
-            <span>{selectedProvider}/{isCustomSelectedModel ? customSelectedModel : selectedModel}</span>
-            <svg className="h-3.5 w-3.5 text-[var(--accent-primary)]/70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-            </svg>
-          </button>
+          {/* Model selection button — hidden under a locked deployment, which
+              shows a read-only line naming the locked Provider/Routing Group. */}
+          {lockedProvider ? (
+            <span className="text-xs px-2.5 py-1 text-[var(--foreground)]/60">
+              {lockedProvider}{lockedModel ? `/${lockedModel}` : ''}
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setIsModelSelectionModalOpen(true)}
+              className="text-xs px-2.5 py-1 rounded border border-[var(--border-color)]/40 bg-[var(--background)]/10 text-[var(--foreground)]/80 hover:bg-[var(--background)]/30 hover:text-[var(--foreground)] transition-colors flex items-center gap-1.5"
+            >
+              <span>{selectedProvider}/{isCustomSelectedModel ? customSelectedModel : selectedModel}</span>
+              <svg className="h-3.5 w-3.5 text-[var(--accent-primary)]/70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+              </svg>
+            </button>
+          )}
 
           {/* Clear the whole conversation */}
           {(conversationTurns.length > 0 || response || currentQuestion ||
@@ -1398,28 +1401,30 @@ const Ask: React.FC<AskProps> = ({
         </form>
       </div>
 
-      {/* Model Selection Modal */}
-      <ModelSelectionModal
-        isOpen={isModelSelectionModalOpen}
-        onClose={() => setIsModelSelectionModalOpen(false)}
-        provider={selectedProvider}
-        setProvider={setSelectedProvider}
-        model={selectedModel}
-        setModel={setSelectedModel}
-        isCustomModel={isCustomSelectedModel}
-        setIsCustomModel={setIsCustomSelectedModel}
-        customModel={customSelectedModel}
-        setCustomModel={setCustomSelectedModel}
-        isComprehensiveView={isComprehensiveView}
-        setIsComprehensiveView={setIsComprehensiveView}
-        showFileFilters={false}
-        onApply={() => {
-          console.log('Model selection applied:', selectedProvider, selectedModel);
-        }}
-        showWikiType={false}
-        authRequired={false}
-        isAuthLoading={false}
-      />
+      {/* Model Selection Modal — not rendered under a locked deployment. */}
+      {!lockedProvider && (
+        <ModelSelectionModal
+          isOpen={isModelSelectionModalOpen}
+          onClose={() => setIsModelSelectionModalOpen(false)}
+          provider={selectedProvider}
+          setProvider={setSelectedProvider}
+          model={selectedModel}
+          setModel={setSelectedModel}
+          isCustomModel={isCustomSelectedModel}
+          setIsCustomModel={setIsCustomSelectedModel}
+          customModel={customSelectedModel}
+          setCustomModel={setCustomSelectedModel}
+          isComprehensiveView={isComprehensiveView}
+          setIsComprehensiveView={setIsComprehensiveView}
+          showFileFilters={false}
+          onApply={() => {
+            console.log('Model selection applied:', selectedProvider, selectedModel);
+          }}
+          showWikiType={false}
+          authRequired={false}
+          isAuthLoading={false}
+        />
+      )}
     </div>
   );
 };

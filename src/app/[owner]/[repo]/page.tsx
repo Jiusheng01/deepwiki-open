@@ -7,6 +7,7 @@ import Markdown from '@/components/Markdown';
 import ModelSelectionModal from '@/components/ModelSelectionModal';
 import ThemeToggle from '@/components/theme-toggle';
 import WikiTreeView from '@/components/WikiTreeView';
+import { useModelConfig } from '@/hooks/useModelConfig';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { RepoInfo } from '@/types/repoinfo';
 import getRepoUrl from '@/utils/getRepoUrl';
@@ -183,6 +184,24 @@ export default function RepoWikiPage() {
   const includedFiles = searchParams.get('included_files') || '';
   const [modelIncludedDirs, setModelIncludedDirs] = useState(includedDirs);
   const [modelIncludedFiles, setModelIncludedFiles] = useState(includedFiles);
+
+  // Locked-deployment state, read from /api/models/config. Both fields are
+  // absent (not null) when the lock is off, so guard on truthiness.
+  const { lockedProvider, lockedModel } = useModelConfig();
+
+  // Under a locked deployment the provider/model are fixed for the whole
+  // deployment: pin the local selection to the locked values so the refresh
+  // flow reuses them automatically instead of prompting.
+  useEffect(() => {
+    if (!lockedProvider) return;
+
+    setSelectedProviderState(lockedProvider);
+    if (lockedModel) {
+      setSelectedModelState(lockedModel);
+    }
+    setIsCustomSelectedModelState(false);
+    setCustomSelectedModelState('');
+  }, [lockedProvider, lockedModel]);
 
 
   // Wiki type state - default to comprehensive view
@@ -999,10 +1018,11 @@ export default function RepoWikiPage() {
                 </span>
               </div>
 
-              {/* Refresh Wiki button */}
+              {/* Refresh Wiki button. Under a locked deployment there is no
+                  model selection: refresh directly with the locked values. */}
               <div className="mb-5">
                 <button
-                  onClick={() => setIsModelSelectionModalOpen(true)}
+                  onClick={() => (lockedProvider ? confirmRefresh() : setIsModelSelectionModalOpen(true))}
                   disabled={isLoading}
                   className="flex items-center w-full text-xs px-3 py-2 bg-[var(--background)] text-[var(--foreground)] rounded-md hover:bg-[var(--background)]/80 disabled:opacity-50 disabled:cursor-not-allowed border border-[var(--border-color)] transition-colors hover:cursor-pointer"
                 >
@@ -1182,37 +1202,40 @@ export default function RepoWikiPage() {
         </div>
       </div>
 
-      <ModelSelectionModal
-        isOpen={isModelSelectionModalOpen}
-        onClose={() => setIsModelSelectionModalOpen(false)}
-        provider={selectedProviderState}
-        setProvider={setSelectedProviderState}
-        model={selectedModelState}
-        setModel={setSelectedModelState}
-        isCustomModel={isCustomSelectedModelState}
-        setIsCustomModel={setIsCustomSelectedModelState}
-        customModel={customSelectedModelState}
-        setCustomModel={setCustomSelectedModelState}
-        isComprehensiveView={isComprehensiveView}
-        setIsComprehensiveView={setIsComprehensiveView}
-        showFileFilters={true}
-        excludedDirs={modelExcludedDirs}
-        setExcludedDirs={setModelExcludedDirs}
-        excludedFiles={modelExcludedFiles}
-        setExcludedFiles={setModelExcludedFiles}
-        includedDirs={modelIncludedDirs}
-        setIncludedDirs={setModelIncludedDirs}
-        includedFiles={modelIncludedFiles}
-        setIncludedFiles={setModelIncludedFiles}
-        onApply={confirmRefresh}
-        showWikiType={true}
-        showTokenInput={effectiveRepoInfo.type !== 'local' && !currentToken} // Show token input if not local and no current token
-        repositoryType={effectiveRepoInfo.type as 'github' | 'gitlab' | 'bitbucket'}
-        authRequired={authRequired}
-        authCode={authCode}
-        setAuthCode={setAuthCode}
-        isAuthLoading={isAuthLoading}
-      />
+      {/* Model Selection Modal — not rendered under a locked deployment. */}
+      {!lockedProvider && (
+        <ModelSelectionModal
+          isOpen={isModelSelectionModalOpen}
+          onClose={() => setIsModelSelectionModalOpen(false)}
+          provider={selectedProviderState}
+          setProvider={setSelectedProviderState}
+          model={selectedModelState}
+          setModel={setSelectedModelState}
+          isCustomModel={isCustomSelectedModelState}
+          setIsCustomModel={setIsCustomSelectedModelState}
+          customModel={customSelectedModelState}
+          setCustomModel={setCustomSelectedModelState}
+          isComprehensiveView={isComprehensiveView}
+          setIsComprehensiveView={setIsComprehensiveView}
+          showFileFilters={true}
+          excludedDirs={modelExcludedDirs}
+          setExcludedDirs={setModelExcludedDirs}
+          excludedFiles={modelExcludedFiles}
+          setExcludedFiles={setModelExcludedFiles}
+          includedDirs={modelIncludedDirs}
+          setIncludedDirs={setModelIncludedDirs}
+          includedFiles={modelIncludedFiles}
+          setIncludedFiles={setModelIncludedFiles}
+          onApply={confirmRefresh}
+          showWikiType={true}
+          showTokenInput={effectiveRepoInfo.type !== 'local' && !currentToken} // Show token input if not local and no current token
+          repositoryType={effectiveRepoInfo.type as 'github' | 'gitlab' | 'bitbucket'}
+          authRequired={authRequired}
+          authCode={authCode}
+          setAuthCode={setAuthCode}
+          isAuthLoading={isAuthLoading}
+        />
+      )}
     </div>
   );
 }

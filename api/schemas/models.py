@@ -34,3 +34,11 @@ class ModelConfig(BaseModel):
         ..., description="List of available model providers"
     )
     defaultProvider: str = Field(..., description="ID of the default provider")
+    # Locked Provider mode: present only while DEEPWIKI_LOCK_PROVIDER is set.
+    # Additive so an unlocked deployment's response is unchanged.
+    lockedProvider: str | None = Field(
+        None, description="ID of the provider the deployment is locked to, if any"
+    )
+    lockedModel: str | None = Field(
+        None, description="Routing Group (model) of the locked provider, if any"
+    )

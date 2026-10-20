@@ -140,6 +140,17 @@
         }
       }
     },
+    "magpie": {
+      "client_class": "MagpieClient",
+      "default_model": "${MAGPIE_MODEL}",
+      "supportsCustomModel": false,
+      "models": {
+        "group/default": {
+          "temperature": 0.7,
+          "top_p": 0.8
+        }
+      }
+    },
     "bedrock": {
       "client_class": "BedrockClient",
       "default_model": "anthropic.claude-3-sonnet-20240229-v1:0",

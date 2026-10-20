@@ -1,6 +1,7 @@
 import pytest
 
-from api.config import iterate_files
+from api.clients import MagpieClient
+from api.config import iterate_files, resolve_provider
 
 
 def make_repo(root):
@@ -60,3 +61,197 @@ def test_iterate_files_excluded_dirs(exclude_test_config, tmp_path, excluded_dir
     make_repo(tmp_path)
     files = set(iterate_files(root_dir=str(tmp_path), excluded_dirs=excluded_dirs))
     assert files == {"README.md", "CHANGELOG.md"}
+
+
+# --------------------------------------------------------------------------- #
+# Magpie provider configuration resolution
+# --------------------------------------------------------------------------- #
+def test_magpie_provider_resolves_from_environment(monkeypatch):
+    from api.config import load_generator_config
+
+    monkeypatch.setenv("MAGPIE_MODEL", "group/env-group")
+
+    magpie = load_generator_config()["providers"]["magpie"]
+
+    # Default model is taken from the environment placeholder...
+    assert magpie["default_model"] == "group/env-group"
+    # ...custom models are disallowed and the client class is wired up...
+    assert magpie["supportsCustomModel"] is False
+    assert magpie["client_class"] == "MagpieClient"
+    assert magpie["model_client"] is MagpieClient
+    # ...and there is exactly one Routing Group entry.
+    assert len(magpie["models"]) == 1
+
+
+def test_get_model_config_magpie_unknown_routing_group_does_not_raise():
+    import api.config as api_config
+
+    # The operator changed MAGPIE_MODEL to a value not listed in the models
+    # map; resolving it must not raise and must carry that model through. Read
+    # through the live module, matching the sibling test: other modules
+    # importlib.reload(api.config), so an import-time binding could be stale.
+    result = api_config.get_model_config("magpie", "group/unlisted-group")
+
+    assert result["model_client"] is MagpieClient
+    assert result["model_kwargs"]["model"] == "group/unlisted-group"
+
+
+def test_get_model_config_magpie_uses_configured_default_model():
+    import api.config as api_config
+
+    # Read the configured default through the live module: other test modules
+    # importlib.reload(api.config), which rebinds its module-level ``configs``.
+    # An import-time binding could be a stale object, so the oracle and the
+    # code under test would then resolve against two different configs.
+    default_model = api_config.configs["providers"]["magpie"]["default_model"]
+
+    result = api_config.get_model_config("magpie", None)
+
+    assert result["model_client"] is MagpieClient
+    assert result["model_kwargs"]["model"] == default_model
+
+
+def test_models_config_endpoint_exposes_magpie_as_single_group_provider(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    # A blank value means unset (see get_locked_provider), so forcing the lock
+    # off this way is order-free with respect to api.main's one-time
+    # load_dotenv() (which never overrides an already-set variable). The
+    # assertions below are the unlocked, multi-provider shape.
+    from api.main import app
+
+    monkeypatch.setenv("DEEPWIKI_LOCK_PROVIDER", "")
+
+    with TestClient(app) as client:
+        response = client.get("/models/config")
+        assert response.status_code == 200
+        providers = {p["id"]: p for p in response.json()["providers"]}
+
+    magpie = providers["magpie"]
+    assert magpie["supportsCustomModel"] is False
+    assert len(magpie["models"]) == 1
+    # Regression: the other providers are still present and unchanged.
+    assert {"google", "openai", "openrouter", "ollama"} <= set(providers)
+    assert response.json()["defaultProvider"] == "google"
+
+
+# --------------------------------------------------------------------------- #
+# Locked Provider: the single coercion decision
+# --------------------------------------------------------------------------- #
+def test_lock_resolver_returns_locked_provider_when_request_omits_provider(monkeypatch):
+    # The request schema defaults the provider to "google" and the frontend
+    # drops empty values, so an omitted Provider arrives as "" (or the default).
+    # Either way the lock must win.
+    monkeypatch.setenv("DEEPWIKI_LOCK_PROVIDER", "magpie")
+
+    assert resolve_provider("") == "magpie"
+    assert resolve_provider(None) == "magpie"
+
+
+def test_lock_resolver_returns_locked_provider_when_request_names_another_provider(
+    monkeypatch,
+):
+    monkeypatch.setenv("DEEPWIKI_LOCK_PROVIDER", "magpie")
+
+    assert resolve_provider("google") == "magpie"
+    assert resolve_provider("openai") == "magpie"
+
+
+def test_lock_resolver_returns_request_provider_when_lock_unset(monkeypatch):
+    monkeypatch.setenv("DEEPWIKI_LOCK_PROVIDER", "")
+
+    assert resolve_provider("openai") == "openai"
+    assert resolve_provider("google") == "google"
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_lock_resolver_treats_blank_lock_as_unset(monkeypatch, blank):
+    monkeypatch.setenv("DEEPWIKI_LOCK_PROVIDER", blank)
+
+    assert resolve_provider("openai") == "openai"
+
+
+# --------------------------------------------------------------------------- #
+# Locked Provider exposed through the model-configuration response
+# --------------------------------------------------------------------------- #
+def _models_config():
+    from fastapi.testclient import TestClient
+
+    from api.main import app
+
+    with TestClient(app) as client:
+        response = client.get("/models/config")
+    assert response.status_code == 200
+    return response.json()
+
+
+def test_models_config_reports_locked_provider_and_its_routing_group(monkeypatch):
+    import api.config as api_config
+
+    monkeypatch.setenv("DEEPWIKI_LOCK_PROVIDER", "magpie")
+    # Other test modules reload api.config (importlib.reload), which rebinds its
+    # module-level ``configs``: read it through the module so this always
+    # touches the live configuration. Stand in an already-resolved Routing Group
+    # so this exercises the resolved path; an unresolved placeholder now fails
+    # loudly (see the test below).
+    monkeypatch.setitem(
+        api_config.configs["providers"]["magpie"], "default_model", "group/test-group"
+    )
+
+    body = _models_config()
+
+    assert body["lockedProvider"] == "magpie"
+    # The locked model is the locked provider's single Routing Group.
+    assert body["lockedModel"] == "group/test-group"
+    # The lock is additive: the full provider list is still returned.
+    assert body["defaultProvider"] == "google"
+    assert {"google", "openai", "magpie"} <= {p["id"] for p in body["providers"]}
+
+
+def test_models_config_is_unchanged_when_lock_unset(monkeypatch):
+    # A blank value means unset (see get_locked_provider), so this is order-free
+    # with respect to api.main's one-time load_dotenv().
+    monkeypatch.setenv("DEEPWIKI_LOCK_PROVIDER", "")
+
+    body = _models_config()
+
+    # Regression: with no lock the response carries no extra fields at all.
+    assert set(body) == {"providers", "defaultProvider"}
+    assert body["defaultProvider"] == "google"
+
+
+def test_models_config_fails_loudly_when_locked_routing_group_is_unresolved(
+    monkeypatch,
+):
+    """DEEPWIKI_LOCK_PROVIDER set while the Routing Group env var (MAGPIE_MODEL)
+    was unset leaves the raw placeholder in the loaded config. Reporting it
+    would leak the placeholder into the UI, the navigation URL and the outgoing
+    request, so the endpoint must fail loudly instead."""
+    from fastapi.testclient import TestClient
+
+    import api.config as api_config
+    from api.main import app
+
+    monkeypatch.setenv("DEEPWIKI_LOCK_PROVIDER", "magpie")
+    # Other test modules reload api.config (importlib.reload), which rebinds its
+    # module-level names, so read both the live configuration and the live
+    # exception class through the module. Deterministic regardless of whether
+    # MAGPIE_MODEL happened to be set when the configuration was imported.
+    monkeypatch.setitem(
+        api_config.configs["providers"]["magpie"], "default_model", "${MAGPIE_MODEL}"
+    )
+
+    with pytest.raises(api_config.LockedProviderMisconfiguredError) as excinfo:
+        with TestClient(app) as client:
+            client.get("/models/config")
+
+    # The error names the missing environment variable.
+    assert "MAGPIE_MODEL" in str(excinfo.value)
+
+
+def test_locked_model_is_none_when_unlocked(monkeypatch):
+    from api.config import get_locked_model
+
+    monkeypatch.setenv("DEEPWIKI_LOCK_PROVIDER", "")
+
+    assert get_locked_model() is None

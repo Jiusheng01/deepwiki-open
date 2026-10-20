@@ -2,24 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useLanguage } from '@/contexts/LanguageContext';
-
-// Define the interfaces for our model configuration
-interface Model {
-  id: string;
-  name: string;
-}
-
-interface Provider {
-  id: string;
-  name: string;
-  models: Model[];
-  supportsCustomModel?: boolean;
-}
-
-interface ModelConfig {
-  providers: Provider[];
-  defaultProvider: string;
-}
+import { useModelConfig, type Provider } from '@/hooks/useModelConfig';
 
 interface ModelSelectorProps {
   provider: string;
@@ -70,51 +53,36 @@ export default function UserSelector({
   const [filterMode, setFilterMode] = useState<'exclude' | 'include'>('exclude');
   const { messages: t } = useLanguage();
 
-  // State for model configurations from backend
-  const [modelConfig, setModelConfig] = useState<ModelConfig | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Model configurations, and the deployment lock, from the backend.
+  const { modelConfig, isLoading, error, lockedProvider, lockedModel } = useModelConfig();
 
   // State for viewing default values
   const [showDefaultDirs, setShowDefaultDirs] = useState(false);
   const [showDefaultFiles, setShowDefaultFiles] = useState(false);
 
-  // Fetch model configurations from the backend
+  // When the deployment is locked, the locked provider/model are
+  // authoritative: force them into the shared state so the rest of the
+  // dialog and the navigation query string use concrete values. Otherwise
+  // initialize provider and model with defaults from the API if not already
+  // set.
   useEffect(() => {
-    const fetchModelConfig = async () => {
-      try {
-        setIsLoading(true);
-        setError(null);
+    if (!modelConfig) return;
 
-        const response = await fetch('/api/models/config');
-
-        if (!response.ok) {
-          throw new Error(`Error fetching model configurations: ${response.status}`);
-        }
-
-        const data = await response.json();
-        setModelConfig(data);
-
-        // Initialize provider and model with defaults from API if not already set
-        if (!provider && data.defaultProvider) {
-          setProvider(data.defaultProvider);
-
-          // Find the default provider and set its default model
-          const selectedProvider = data.providers.find((p: Provider) => p.id === data.defaultProvider);
-          if (selectedProvider && selectedProvider.models.length > 0) {
-            setModel(selectedProvider.models[0].id);
-          }
-        }
-      } catch (err) {
-        console.error('Failed to fetch model configurations:', err);
-        setError('Failed to load model configurations. Using default options.');
-      } finally {
-        setIsLoading(false);
+    if (lockedProvider) {
+      setProvider(lockedProvider);
+      if (lockedModel) {
+        setModel(lockedModel);
       }
-    };
+    } else if (!provider && modelConfig.defaultProvider) {
+      setProvider(modelConfig.defaultProvider);
 
-    fetchModelConfig();
-  }, [provider, setModel, setProvider]);
+      // Find the default provider and set its default model
+      const selectedProvider = modelConfig.providers.find((p: Provider) => p.id === modelConfig.defaultProvider);
+      if (selectedProvider && selectedProvider.models.length > 0) {
+        setModel(selectedProvider.models[0].id);
+      }
+    }
+  }, [modelConfig, lockedProvider, lockedModel, provider, setModel, setProvider]);
 
   // Handler for changing provider
   const handleProviderChange = (newProvider: string) => {
@@ -260,6 +228,16 @@ next.config.js
 *.docx
 *.pptx`;
 
+  // Human-readable label for a provider id, matching the dropdown options.
+  const getProviderLabel = (providerId: string): string => {
+    const displayName =
+      modelConfig?.providers.find((p: Provider) => p.id === providerId)?.name || providerId;
+    const key = `provider${providerId.charAt(0).toUpperCase() + providerId.slice(1)}`;
+    return t.form?.[key] || displayName;
+  };
+
+  const isLocked = !!lockedProvider;
+
   // Display loading state
   if (isLoading) {
     return (
@@ -276,101 +254,120 @@ next.config.js
           <div className="text-sm text-red-500 mb-2">{error}</div>
         )}
 
-        {/* Provider Selection */}
-        <div>
-          <label htmlFor="provider-dropdown" className="block text-xs font-medium text-[var(--foreground)] mb-1.5">
-            {t.form?.modelProvider || 'Model Provider'}
-          </label>
-          <select
-            id="provider-dropdown"
-            value={provider}
-            onChange={(e) => handleProviderChange(e.target.value)}
-            className="input-japanese block w-full px-2.5 py-1.5 text-sm rounded-md bg-transparent text-[var(--foreground)] focus:outline-none focus:border-[var(--accent-primary)]"
-          >
-            <option value="" disabled>{t.form?.selectProvider || 'Select Provider'}</option>
-            {modelConfig?.providers.map((providerOption) => (
-              <option key={providerOption.id} value={providerOption.id}>
-                {t.form?.[`provider${providerOption.id.charAt(0).toUpperCase() + providerOption.id.slice(1)}`] || providerOption.name}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Model Selection - consistent height regardless of type */}
-        <div>
-          <label htmlFor={isCustomModel ? "custom-model-input" : "model-dropdown"} className="block text-xs font-medium text-[var(--foreground)] mb-1.5">
-            {t.form?.modelSelection || 'Model Selection'}
-          </label>
-
-          {isCustomModel ? (
-            <input
-              id="custom-model-input"
-              type="text"
-              value={customModel}
-              onChange={(e) => {
-                setCustomModel(e.target.value);
-                setModel(e.target.value);
-              }}
-              placeholder={t.form?.customModelPlaceholder || 'Enter custom model name'}
-              className="input-japanese block w-full px-2.5 py-1.5 text-sm rounded-md bg-transparent text-[var(--foreground)] focus:outline-none focus:border-[var(--accent-primary)]"
-            />
-          ) : (
-            <select
-              id="model-dropdown"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              className="input-japanese block w-full px-2.5 py-1.5 text-sm rounded-md bg-transparent text-[var(--foreground)] focus:outline-none focus:border-[var(--accent-primary)]"
-              disabled={!provider || isLoading || !modelConfig?.providers.find(p => p.id === provider)?.models?.length}
-            >
-              {modelConfig?.providers.find((p: Provider) => p.id === provider)?.models.map((modelOption) => (
-                <option key={modelOption.id} value={modelOption.id}>
-                  {modelOption.name}
-                </option>
-              )) || <option value="">{t.form?.selectModel || 'Select Model'}</option>}
-            </select>
-          )}
-        </div>
-
-        {/* Custom model toggle - only when provider supports it */}
-        {modelConfig?.providers.find((p: Provider) => p.id === provider)?.supportsCustomModel && (
-          <div className="mb-2">
-            <div className="flex items-center pb-1">
-              <div
-                className="relative flex items-center cursor-pointer"
-                onClick={() => {
-                  const newValue = !isCustomModel;
-                  setIsCustomModel(newValue);
-                  if (newValue) {
-                    setCustomModel(model);
-                  }
-                }}
-              >
-                <input
-                  id="use-custom-model"
-                  type="checkbox"
-                  checked={isCustomModel}
-                  onChange={() => {}}
-                  className="sr-only"
-                />
-                <div className={`w-10 h-5 rounded-full transition-colors ${isCustomModel ? 'bg-[var(--accent-primary)]' : 'bg-gray-300 dark:bg-gray-600'}`}></div>
-                <div className={`absolute left-0.5 top-0.5 w-4 h-4 rounded-full bg-white transition-transform transform ${isCustomModel ? 'translate-x-5' : ''}`}></div>
-              </div>
-              <label
-                htmlFor="use-custom-model"
-                className="ml-2 text-sm font-medium text-[var(--muted)] cursor-pointer"
-                onClick={(e) => {
-                  e.preventDefault();
-                  const newValue = !isCustomModel;
-                  setIsCustomModel(newValue);
-                  if (newValue) {
-                    setCustomModel(model);
-                  }
-                }}
-              >
-                {t.form?.useCustomModel || 'Use custom model'}
-              </label>
-            </div>
+        {isLocked ? (
+          /* Locked deployment: one read-only line naming the Provider and its
+             Routing Group. No editable Provider/model/Custom Model controls. */
+          <div className="rounded-md border border-[var(--border-color)]/50 bg-[var(--background)]/30 px-3 py-2 text-sm text-[var(--foreground)]">
+            <span className="text-xs font-medium text-[var(--muted)] mr-1.5">
+              {t.form?.lockedProvider || 'Locked Provider'}:
+            </span>
+            <span className="font-medium">{getProviderLabel(lockedProvider)}</span>
+            {lockedModel && (
+              <>
+                <span className="mx-1.5 text-[var(--muted)]">·</span>
+                <span className="font-medium">{lockedModel}</span>
+              </>
+            )}
           </div>
+        ) : (
+          <>
+            {/* Provider Selection */}
+            <div>
+              <label htmlFor="provider-dropdown" className="block text-xs font-medium text-[var(--foreground)] mb-1.5">
+                {t.form?.modelProvider || 'Model Provider'}
+              </label>
+              <select
+                id="provider-dropdown"
+                value={provider}
+                onChange={(e) => handleProviderChange(e.target.value)}
+                className="input-japanese block w-full px-2.5 py-1.5 text-sm rounded-md bg-transparent text-[var(--foreground)] focus:outline-none focus:border-[var(--accent-primary)]"
+              >
+                <option value="" disabled>{t.form?.selectProvider || 'Select Provider'}</option>
+                {modelConfig?.providers.map((providerOption) => (
+                  <option key={providerOption.id} value={providerOption.id}>
+                    {t.form?.[`provider${providerOption.id.charAt(0).toUpperCase() + providerOption.id.slice(1)}`] || providerOption.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Model Selection - consistent height regardless of type */}
+            <div>
+              <label htmlFor={isCustomModel ? "custom-model-input" : "model-dropdown"} className="block text-xs font-medium text-[var(--foreground)] mb-1.5">
+                {t.form?.modelSelection || 'Model Selection'}
+              </label>
+
+              {isCustomModel ? (
+                <input
+                  id="custom-model-input"
+                  type="text"
+                  value={customModel}
+                  onChange={(e) => {
+                    setCustomModel(e.target.value);
+                    setModel(e.target.value);
+                  }}
+                  placeholder={t.form?.customModelPlaceholder || 'Enter custom model name'}
+                  className="input-japanese block w-full px-2.5 py-1.5 text-sm rounded-md bg-transparent text-[var(--foreground)] focus:outline-none focus:border-[var(--accent-primary)]"
+                />
+              ) : (
+                <select
+                  id="model-dropdown"
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  className="input-japanese block w-full px-2.5 py-1.5 text-sm rounded-md bg-transparent text-[var(--foreground)] focus:outline-none focus:border-[var(--accent-primary)]"
+                  disabled={!provider || isLoading || !modelConfig?.providers.find(p => p.id === provider)?.models?.length}
+                >
+                  {modelConfig?.providers.find((p: Provider) => p.id === provider)?.models.map((modelOption) => (
+                    <option key={modelOption.id} value={modelOption.id}>
+                      {modelOption.name}
+                    </option>
+                  )) || <option value="">{t.form?.selectModel || 'Select Model'}</option>}
+                </select>
+              )}
+            </div>
+
+            {/* Custom model toggle - only when provider supports it */}
+            {modelConfig?.providers.find((p: Provider) => p.id === provider)?.supportsCustomModel && (
+              <div className="mb-2">
+                <div className="flex items-center pb-1">
+                  <div
+                    className="relative flex items-center cursor-pointer"
+                    onClick={() => {
+                      const newValue = !isCustomModel;
+                      setIsCustomModel(newValue);
+                      if (newValue) {
+                        setCustomModel(model);
+                      }
+                    }}
+                  >
+                    <input
+                      id="use-custom-model"
+                      type="checkbox"
+                      checked={isCustomModel}
+                      onChange={() => {}}
+                      className="sr-only"
+                    />
+                    <div className={`w-10 h-5 rounded-full transition-colors ${isCustomModel ? 'bg-[var(--accent-primary)]' : 'bg-gray-300 dark:bg-gray-600'}`}></div>
+                    <div className={`absolute left-0.5 top-0.5 w-4 h-4 rounded-full bg-white transition-transform transform ${isCustomModel ? 'translate-x-5' : ''}`}></div>
+                  </div>
+                  <label
+                    htmlFor="use-custom-model"
+                    className="ml-2 text-sm font-medium text-[var(--muted)] cursor-pointer"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      const newValue = !isCustomModel;
+                      setIsCustomModel(newValue);
+                      if (newValue) {
+                        setCustomModel(model);
+                      }
+                    }}
+                  >
+                    {t.form?.useCustomModel || 'Use custom model'}
+                  </label>
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         {showFileFilters && (

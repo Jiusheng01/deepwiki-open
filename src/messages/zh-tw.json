@@ -44,6 +44,8 @@
     "conciseDescription": "頁面更少，僅包含核心資訊的簡化 Wiki",
     "providerGoogle": "Google",
     "providerOpenAI": "OpenAI",
+    "providerMagpie": "Magpie",
+    "lockedProvider": "鎖定的提供商",
     "providerOpenRouter": "OpenRouter",
     "providerOllama": "Ollama（本機）",
     "localOllama": "本機 Ollama 模型",

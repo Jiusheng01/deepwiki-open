@@ -44,6 +44,8 @@
     "conciseDescription": "ページ数が少なく、必要な情報のみを含む簡素化されたWiki",
     "providerGoogle": "Google",
     "providerOpenAI": "OpenAI",
+    "providerMagpie": "Magpie",
+    "lockedProvider": "ロックされたプロバイダー",
     "providerOpenRouter": "OpenRouter",
     "providerOllama": "Ollama（ローカル）",
     "localOllama": "ローカルOllamaモデル",

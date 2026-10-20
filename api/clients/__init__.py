@@ -13,6 +13,7 @@ from .bedrock import BedrockClient
 from .dashscope import DashscopeClient
 from .google_embedder import GoogleEmbedderClient
 from .litellm import LiteLLMClient
+from .magpie import MagpieClient
 from .ollama import OllamaClient
 from .openrouter import OpenRouterClient
 
@@ -24,6 +25,7 @@ __all__ = [
     "GoogleEmbedderClient",
     "GoogleGenAIClient",
     "LiteLLMClient",
+    "MagpieClient",
     "OllamaClient",
     "OpenAIClient",
     "OpenRouterClient",

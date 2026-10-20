@@ -9,6 +9,8 @@ from api.config import (
     AWS_SECRET_ACCESS_KEY,
     GOOGLE_API_KEY,
     LITELLM_API_KEY,
+    MAGPIE_API_KEY,
+    MAGPIE_MODEL,
     OPENAI_API_KEY,
     OPENROUTER_API_KEY,
 )
@@ -16,7 +18,7 @@ from api.logger import get_logger
 
 if TYPE_CHECKING:
     from ollama import ChatResponse
-    from openai import AsyncStream
+    from openai import AsyncOpenAI, AsyncStream
     from openai.types.chat import ChatCompletionChunk
 
     from api.clients import OpenAIClient
@@ -226,6 +228,71 @@ class LiteLLMChatStreamer(_OpenAICompatStreamer):
         from api.clients import LiteLLMClient
 
         return LiteLLMClient()
+
+
+class MagpieChatStreamer(ChatStreamer):
+    provider = "magpie"
+    error_hint = (
+        "Please check that you have set the MAGPIE_BASE_URL and MAGPIE_API_KEY "
+        "environment variables with valid values."
+    )
+
+    def __init__(self, *, model: str, model_config: MODEL_CFG):
+        if not MAGPIE_API_KEY:
+            logger.warning("MAGPIE_API_KEY not configured, but continuing with request")
+
+        # Magpie is an OpenAI-compatible *chat completions* gateway. The pinned
+        # adalflow 1.1.3 routes every OpenAI-compatible call through the
+        # Responses API (whose events have no `.choices`), so the shared
+        # OpenAI-compatible streamer cannot be used here. MagpieClient is still
+        # reused — but only to resolve MAGPIE_BASE_URL / MAGPIE_API_KEY.
+        self.client = self._build_client()
+        # ``respond_stream`` may run more than once per streamer (the chat
+        # pipeline retries without context on a token-limit error); build the
+        # async client once, lazily, and reuse it rather than opening a fresh
+        # httpx connection pool per call.
+        self._async_client: "AsyncOpenAI" | None = None
+        # The configured Routing Group (MAGPIE_MODEL) is authoritative: Magpie
+        # owns model routing, so whatever model a request carried is ignored
+        # when MAGPIE_MODEL is set.
+        self.model_kwargs: dict = {"model": MAGPIE_MODEL or model, "stream": True}
+        # Model parameters are optional: a Routing Group not listed in
+        # generator.json yields an empty parameter set, in which case we let
+        # Magpie apply its own defaults.
+        for key in ("temperature", "top_p"):
+            if key in model_config:
+                self.model_kwargs[key] = model_config[key]
+
+        logger.debug("Prompting Magpie with kwargs: %s", self.model_kwargs)
+
+    def _build_client(self):
+        from api.clients import MagpieClient
+
+        return MagpieClient()
+
+    def _build_async_client(self) -> "AsyncOpenAI":
+        # MagpieClient already normalises the base URL (including the `/v1`
+        # suffix) and resolves the API key, so reuse its AsyncOpenAI factory
+        # rather than rebuilding one by hand.
+        return self.client.init_async_client()
+
+    async def respond_stream(self, prompt: str) -> AsyncIterator[str]:
+        if self._async_client is None:
+            self._async_client = self._build_async_client()
+        response: "AsyncStream[ChatCompletionChunk]" = (
+            await self._async_client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                **self.model_kwargs,
+            )
+        )
+
+        async for chunk in response:
+            if (
+                chunk.choices
+                and chunk.choices[0].delta is not None
+                and chunk.choices[0].delta.content is not None
+            ):
+                yield chunk.choices[0].delta.content
 
 
 class BedrockChatStreamer(ChatStreamer):

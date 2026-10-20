@@ -12,6 +12,7 @@ from api.clients import (
     GoogleEmbedderClient,
     GoogleGenAIClient,
     LiteLLMClient,
+    MagpieClient,
     OllamaClient,
     OpenAIClient,
     OpenRouterClient,
@@ -28,6 +29,10 @@ logger = get_logger(__name__)
 # Get API keys from environment variables
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 LITELLM_API_KEY = os.environ.get("LITELLM_API_KEY")
+# Magpie is configured independently of the native OpenAI settings: its own
+# gateway URL, key and Routing Group (model). See api/clients/magpie.py.
+MAGPIE_API_KEY = os.environ.get("MAGPIE_API_KEY")
+MAGPIE_MODEL = os.environ.get("MAGPIE_MODEL")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID")
@@ -41,6 +46,8 @@ if OPENAI_API_KEY:
     os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 if LITELLM_API_KEY:
     os.environ["LITELLM_API_KEY"] = LITELLM_API_KEY
+if MAGPIE_API_KEY:
+    os.environ["MAGPIE_API_KEY"] = MAGPIE_API_KEY
 if GOOGLE_API_KEY:
     os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
 if OPENROUTER_API_KEY:
@@ -73,6 +80,7 @@ CLIENT_CLASSES = {
     GoogleEmbedderClient.__name__: GoogleEmbedderClient,
     OpenAIClient.__name__: OpenAIClient,
     LiteLLMClient.__name__: LiteLLMClient,
+    MagpieClient.__name__: MagpieClient,
     OpenRouterClient.__name__: OpenRouterClient,
     OllamaClient.__name__: OllamaClient,
     BedrockClient.__name__: BedrockClient,
@@ -86,6 +94,7 @@ _DEFAULT_PROVIDER_MAP = {
     "google": GoogleGenAIClient,
     "openai": OpenAIClient,
     "litellm": LiteLLMClient,
+    "magpie": MagpieClient,
     "openrouter": OpenRouterClient,
     "ollama": OllamaClient,
     "bedrock": BedrockClient,
@@ -361,6 +370,84 @@ if lang_config:
     configs["lang_config"] = lang_config
 
 
+# --------------------------------------------------------------------------- #
+# Locked Provider (single-provider deployment mode)
+# --------------------------------------------------------------------------- #
+# When DEEPWIKI_LOCK_PROVIDER names a provider, the whole deployment is pinned
+# to it: every generation request is served by that provider regardless of the
+# Provider it carries (including an omitted one, which the request schema
+# would otherwise default to "google"). See docs/adr/0001 for why the request's
+# Provider is coerced rather than rejected.
+LOCK_PROVIDER_ENV = "DEEPWIKI_LOCK_PROVIDER"
+
+
+def get_locked_provider() -> str | None:
+    """Return the deployment's Locked Provider id, or None when unlocked.
+
+    Read from the environment each call; a blank/whitespace value counts as
+    unset so an empty variable restores the multi-provider behaviour.
+    """
+    return (os.environ.get(LOCK_PROVIDER_ENV) or "").strip() or None
+
+
+def resolve_provider(provider: str | None) -> str | None:
+    """Resolve the Provider a generation request is actually served by.
+
+    While the lock is set this is the one place the coercion happens: the
+    request's Provider value is deliberately ignored and the locked Provider is
+    returned for *any* input -- an omitted/empty value as much as an explicitly
+    different one. With no lock the request value is returned unchanged.
+    """
+    return get_locked_provider() or provider
+
+
+# A configuration string that is still an unsubstituted environment placeholder
+# (replace_env_placeholders substitutes values, so this survives only when the
+# referenced environment variable was not set when the config was loaded).
+_UNRESOLVED_PLACEHOLDER = re.compile(r"\$\{([A-Z0-9_]+)\}")
+
+
+class LockedProviderMisconfiguredError(RuntimeError):
+    """The Locked Provider is set but its Routing Group is unresolved."""
+
+
+def get_locked_model() -> str | None:
+    """Return the Locked Provider's Routing Group (model), or None when unlocked.
+
+    The Routing Group is the Locked Provider's configured default model, written
+    as an environment placeholder (Magpie's is ``${MAGPIE_MODEL}``). If that
+    variable was not set when the configuration was loaded, the placeholder is
+    left in the config verbatim; used as-is it would silently leak into the
+    /models/config response, the UI, the navigation URL and the outgoing request.
+    Refuse to pass it through instead -- fail loudly and name the missing
+    variable.
+    """
+    locked_provider = get_locked_provider()
+    if not locked_provider:
+        return None
+
+    default_model = configs.get("providers", {}).get(locked_provider, {}).get(
+        "default_model"
+    )
+    match = (
+        _UNRESOLVED_PLACEHOLDER.fullmatch(default_model)
+        if isinstance(default_model, str)
+        else None
+    )
+    if match:
+        env_var_name = match.group(1)
+        message = (
+            f"DEEPWIKI_LOCK_PROVIDER is set to '{locked_provider}' but its Routing "
+            f"Group model is the unresolved placeholder '{default_model}': the "
+            f"{env_var_name} environment variable is not set. Set {env_var_name} to the "
+            f"Routing Group, or unset DEEPWIKI_LOCK_PROVIDER, and restart."
+        )
+        logger.error(message)
+        raise LockedProviderMisconfiguredError(message)
+
+    return default_model
+
+
 def get_model_config(provider="google", model=None):
     """
     Get configuration for the specified provider and model
@@ -391,12 +478,15 @@ def get_model_config(provider="google", model=None):
             raise ValueError(f"No default model specified for provider '{provider}'")
 
     # Get model parameters (if present)
-    model_params = {}
-    if model in provider_config.get("models", {}):
-        model_params = provider_config["models"][model]
-    else:
-        default_model = provider_config.get("default_model")
-        model_params = provider_config["models"][default_model]
+    # Fall back to an empty parameter set when neither the requested model nor
+    # the default model is a key of the provider's models map. Magpie's single
+    # Routing Group entry is written literally (env placeholders are substituted
+    # into values, not map keys), so changing MAGPIE_MODEL to an unlisted value
+    # must not raise here.
+    models_config = provider_config.get("models", {})
+    model_params = models_config.get(model)
+    if model_params is None:
+        model_params = models_config.get(provider_config.get("default_model")) or {}
 
     # Prepare base configuration
     result = {

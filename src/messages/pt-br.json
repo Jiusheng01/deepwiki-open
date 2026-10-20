@@ -44,6 +44,8 @@
     "conciseDescription": "Wiki simplificada com menos páginas e informações essenciais",
     "providerGoogle": "Google",
     "providerOpenAI": "OpenAI",
+    "providerMagpie": "Magpie",
+    "lockedProvider": "Provedor Bloqueado",
     "providerOpenRouter": "OpenRouter",
     "providerOllama": "Ollama (Local)",
     "localOllama": "Modelo Ollama Local",

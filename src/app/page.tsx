@@ -10,6 +10,7 @@ import ConfigurationModal from '@/components/ConfigurationModal';
 import ProcessedProjects from '@/components/ProcessedProjects';
 import { extractUrlPath, extractUrlDomain } from '@/utils/urlDecoder';
 import { useProcessedProjects } from '@/hooks/useProcessedProjects';
+import { useModelConfig } from '@/hooks/useModelConfig';
 
 import { useLanguage } from '@/contexts/LanguageContext';
 
@@ -126,6 +127,11 @@ export default function Home() {
   const [model, setModel] = useState<string>('');
   const [isCustomModel, setIsCustomModel] = useState<boolean>(false);
   const [customModel, setCustomModel] = useState<string>('');
+
+  // Deployment-level lock. When the backend reports a locked provider, the
+  // generation URL is always built with these values so downstream pages
+  // receive concrete provider/model regardless of cached or default state.
+  const { lockedProvider, lockedModel } = useModelConfig();
 
   // Wiki type state - default to comprehensive view
   const [isComprehensiveView, setIsComprehensiveView] = useState<boolean>(true);
@@ -356,9 +362,10 @@ export default function Home() {
     } else {
       params.append('repo_url', encodeURIComponent(repositoryInput));
     }
-    // Add model parameters
-    params.append('provider', provider);
-    params.append('model', model);
+    // Add model parameters. Under a locked deployment the locked provider and
+    // model take precedence so downstream pages always get concrete values.
+    params.append('provider', lockedProvider || provider);
+    params.append('model', lockedModel || model);
     if (isCustomModel && customModel) {
       params.append('custom_model', customModel);
     }
